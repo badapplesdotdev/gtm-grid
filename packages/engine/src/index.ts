@@ -8,7 +8,7 @@ import type { AiConfig } from "./types.js";
 import type { EngineConfig } from "./execute.js";
 
 export { Db } from "./db.js";
-export { Engine, mapConcurrent, RateLimiter, DEFAULT_RATE_LIMIT, aiConfigFromEnv } from "./execute.js";
+export { Engine, ColumnNotFoundError, mapConcurrent, RateLimiter, DEFAULT_RATE_LIMIT, aiConfigFromEnv } from "./execute.js";
 export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress, RunErrorContext } from "./execute.js";
 export { Registry, defaultRegistry, bundledConnectors } from "./registry.js";
 export { runFunction, normalizeCode } from "./sandbox.js";

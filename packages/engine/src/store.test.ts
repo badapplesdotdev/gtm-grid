@@ -10,7 +10,7 @@
 
 import { Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
-import { Engine } from "./execute.js";
+import { ColumnNotFoundError, Engine } from "./execute.js";
 import { Registry } from "./registry.js";
 import { GridStore, CredentialStore, GridStoreError, type GridStoreShape } from "./store.js";
 import { makeMemoryStore } from "./test-helpers.js";
@@ -178,10 +178,18 @@ describe("Engine.runColumn over an injected in-memory store", () => {
     expect(res).toEqual({ ran: 0, errors: 0 });
   });
 
-  it("throws for an unknown column id (unchanged behaviour)", async () => {
+  it("throws a typed, value-free error for an unknown column id", async () => {
     const store = makeMemoryStore();
     const engine = new Engine({}, echoRegistry(), { store, creds: store });
-    await expect(engine.runColumn("does-not-exist")).rejects.toThrow(/not found/);
+    const error = await engine.runColumn("does-not-exist").then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(ColumnNotFoundError);
+    // The id rides a structured field, never the message, so a caller reporting
+    // this never puts a raw UUID in an error title.
+    expect((error as ColumnNotFoundError).columnId).toBe("does-not-exist");
+    expect((error as ColumnNotFoundError).message).not.toContain("does-not-exist");
   });
 
   it("marks a cell error (not silent done) when a param read throws (#23)", async () => {

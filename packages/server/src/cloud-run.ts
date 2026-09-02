@@ -24,6 +24,7 @@
 import { Data, Effect } from "effect";
 import {
   CloudSchemaMapping,
+  ColumnNotFoundError,
   Engine,
   cloudGridStoreShape,
   cloudTableGateway,
@@ -425,13 +426,20 @@ export async function runCloudColumn(
     store,
     creds: store,
   });
-  return engine.runColumn(req.columnId, {
-    force: req.force,
-    rowIds: req.rowIds,
-    // Clamp the caller-controlled fan-out to a safe ceiling (M6) so a too-large
-    // `req.concurrency` cannot multiply worker POSTs / sandboxed executions.
-    concurrency: clampConcurrency(req.concurrency),
-  });
+  try {
+    return await engine.runColumn(req.columnId, {
+      force: req.force,
+      rowIds: req.rowIds,
+      // Clamp the caller-controlled fan-out to a safe ceiling (M6) so a too-large
+      // `req.concurrency` cannot multiply worker POSTs / sandboxed executions.
+      concurrency: clampConcurrency(req.concurrency),
+    });
+  } catch (e) {
+    // A column deleted mid-run is normal, not a systemic bug: resolve it as a
+    // no-op so it never surfaces as a reported exception (see ColumnNotFoundError).
+    if (e instanceof ColumnNotFoundError) return { ran: 0, errors: 0 };
+    throw e;
+  }
 }
 
 /** Inputs the desktop forwards to preview a not-yet-saved function column. */
