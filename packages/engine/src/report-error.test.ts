@@ -10,7 +10,7 @@ import { makeMemoryStore, type MemoryStore } from "./test-helpers.js";
 import type { Connector, ConnectorMethod, RunErrorContext } from "./types.js";
 
 /** A connector whose `boom` method throws — fixed message, or per-row distinct. */
-function throwingRegistry(opts: { distinctPerRow?: boolean } = {}) {
+function throwingRegistry(opts: { distinctPerRow?: boolean; message?: string } = {}) {
   const method: ConnectorMethod = {
     id: "boom",
     label: "Boom",
@@ -19,7 +19,9 @@ function throwingRegistry(opts: { distinctPerRow?: boolean } = {}) {
     batchSize: 1,
     credits: 0,
     run: async (inputs) => {
-      throw new Error(opts.distinctPerRow ? `fail ${String(inputs.value)}` : "always the same failure");
+      throw new Error(
+        opts.message ?? (opts.distinctPerRow ? `fail ${String(inputs.value)}` : "always the same failure"),
+      );
     },
   };
   const connector: Connector = { id: "test", name: "Test", category: "test", auth: null, methods: [method] };
@@ -85,5 +87,39 @@ describe("engine reportError (deduped systemic-error seam)", () => {
     const engine = new Engine({ defaultRateLimit: {} }, throwingRegistry(), { store, creds: store });
     const res = await engine.runColumn(colId);
     expect(res.errors).toBe(3); // unchanged behaviour, no throw
+  });
+
+  it("does NOT report a user-actionable failure (expired login), but still errors the cell", async () => {
+    const store = makeMemoryStore();
+    const reportError = vi.fn();
+    const colId = seed(store, 4);
+    const engine = new Engine(
+      { defaultRateLimit: {}, reportError },
+      throwingRegistry({ message: "401 OAuth access token has expired. Re-authenticate to continue." }),
+      { store, creds: store },
+    );
+
+    const res = await engine.runColumn(colId);
+
+    expect(res.errors).toBe(4); // every cell still recorded as an error
+    expect(reportError).not.toHaveBeenCalled(); // kept off error tracking
+    const cell = store.readCell("r0", colId);
+    expect(cell?.status).toBe("error");
+    expect(cell?.error).toMatch(/re-authenticate/i);
+  });
+
+  it("hands reportError the ORIGINAL error, not an opaque FiberFailure", async () => {
+    const store = makeMemoryStore();
+    const reportError = vi.fn();
+    const colId = seed(store, 2);
+    const engine = new Engine({ defaultRateLimit: {}, reportError }, throwingRegistry(), { store, creds: store });
+
+    await engine.runColumn(colId);
+
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [error] = reportError.mock.calls[0] as [Error];
+    expect(error).toBeInstanceOf(Error);
+    expect(error.name).toBe("Error"); // NOT "(FiberFailure) ..."
+    expect(error.message).toBe("always the same failure");
   });
 });

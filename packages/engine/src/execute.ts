@@ -2,7 +2,8 @@
 // column over its rows, resolving {{Column Name}} templates, dispatching sdk
 // calls host-side, and writing cells with pending/running/done/error status.
 
-import { Effect } from "effect";
+import { Cause, Effect, Exit } from "effect";
+import { classifyCellError } from "./cell-error.js";
 import {
   buildFormulaPrelude,
   compileExpression,
@@ -234,8 +235,8 @@ export class Engine {
   }
 
   /** Host-side dispatcher exposed to the sandbox as `sdk.<provider>.<method>`. */
-  dispatch: SandboxDispatch = (provider, method, input) =>
-    Effect.runPromise(
+  dispatch: SandboxDispatch = async (provider, method, input) => {
+    const exit = await Effect.runPromiseExit(
       Effect.gen(this, function* () {
         const m = this.registry.method(provider, method);
         if (!m) throw new Error(`Unknown function ${provider}.${method}`);
@@ -270,6 +271,14 @@ export class Engine {
         );
       }),
     );
+    if (Exit.isSuccess(exit)) return exit.value;
+    // A failed dispatch surfaces the ORIGINAL connector error (its class, message
+    // and any HTTP `status`), squashed out of the Effect cause. Without this the
+    // rejection escaped as an opaque `FiberFailure`, which both hid the real error
+    // from error classification and fingerprinted every failure as one
+    // "(FiberFailure) Error" issue in error tracking.
+    throw Cause.squash(exit.cause);
+  };
 
   /**
    * Resolve a column's params for a row, interpolating {{Column Name}} from cells.
@@ -475,7 +484,11 @@ export class Engine {
       counters.ran++;
     };
     const markError = async (rowId: string, e: unknown): Promise<void> => {
-      const message = e instanceof Error ? e.message : String(e);
+      // Classify the failure: an auth/credit/config problem is the user's to fix,
+      // so it lands on the cell (with a re-authenticate hint for auth) but is kept
+      // OFF error tracking. Only a genuine `defect` reaches `reportError`.
+      const classified = classifyCellError(e);
+      const message = classified.message;
       if (firstError === undefined) firstError = message;
       const { ranAt, runMs } = runMeta(rowId);
       await Effect.runPromise(
@@ -487,7 +500,7 @@ export class Engine {
       // deduped per run so noise stays bounded. Never let a telemetry failure
       // abort the run.
       const report = this.config.reportError;
-      if (report && reportedSignatures.size < MAX_REPORTED_ERRORS) {
+      if (report && !classified.userActionable && reportedSignatures.size < MAX_REPORTED_ERRORS) {
         const signature = `${col.provider}:${col.method}:${message}`;
         if (!reportedSignatures.has(signature)) {
           reportedSignatures.add(signature);
