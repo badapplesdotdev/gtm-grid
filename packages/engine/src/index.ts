@@ -10,6 +10,7 @@ import type { EngineConfig } from "./execute.js";
 export { Db } from "./db.js";
 export { Engine, mapConcurrent, RateLimiter, DEFAULT_RATE_LIMIT, aiConfigFromEnv } from "./execute.js";
 export type { EngineConfig, RunColumnOptions, EngineStores, CellProgress, RunErrorContext } from "./execute.js";
+export { classifyCellError, type CellErrorKind, type ClassifiedCellError } from "./cell-error.js";
 export { Registry, defaultRegistry, bundledConnectors } from "./registry.js";
 export { runFunction, normalizeCode } from "./sandbox.js";
 export { defineHttpConnector } from "./connectors/http.js";
