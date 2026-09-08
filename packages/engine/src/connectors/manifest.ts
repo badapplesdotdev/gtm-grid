@@ -519,8 +519,9 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  * Run a `poll`-flavoured method: start the job (this method's verb/path), then poll
  * the sibling status method host-side until it reaches `doneWhen` (return its data),
  * hits a `failWhen` state, or exceeds the timeout (throw). Because this awaits on the
- * host, the in-sandbox per-cell interrupt never fires mid-wait — a multi-minute job
- * completes in a single connector call.
+ * host, the in-sandbox per-cell interrupt never fires mid-wait — and the guest CPU
+ * deadline is pushed forward across this whole wait, so a multi-minute job completes
+ * in a single connector call without spending the cell's compute budget.
  */
 async function runPollingMethod(
   man: ExtensionManifest,

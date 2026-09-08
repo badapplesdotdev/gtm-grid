@@ -102,6 +102,13 @@ export interface EngineConfig {
    * status regardless; this is purely the systemic-bug signal. Absent ⇒ no reporting.
    */
   reportError?: (error: unknown, context: RunErrorContext) => void;
+  /**
+   * Guest CPU-time budget per cell in ms, passed to the sandbox (default 30s). It
+   * bounds only the time a column's OWN JS runs — time spent awaiting `sdk` calls
+   * is never charged against it (see {@link runFunction}). Raise it for columns
+   * whose local formula/code is genuinely heavy; a slow API does NOT need it.
+   */
+  sandboxTimeoutMs?: number;
 }
 
 /** Context handed to {@link EngineConfig.reportError} for a failed cell run. */
@@ -570,6 +577,8 @@ export class Engine {
               providers,
               dispatch: this.dispatch,
               prelude: conditionPrelude,
+              label: `${col.name} (run condition)`,
+              timeoutMs: this.config.sandboxTimeoutMs,
             });
             if (!pass) {
               // Mark the cell so the user can SEE why it's blank — gated off by the run
@@ -597,7 +606,15 @@ export class Engine {
           const inputs = formula
             ? await Effect.runPromise(this.resolveCells(col, rowId, reads))
             : await Effect.runPromise(this.resolveParams(col, rowId, reads));
-          const result = await runFunction({ code, inputs, providers, dispatch: this.dispatch, prelude: formulaPrelude });
+          const result = await runFunction({
+            code,
+            inputs,
+            providers,
+            dispatch: this.dispatch,
+            prelude: formulaPrelude,
+            label: col.name,
+            timeoutMs: this.config.sandboxTimeoutMs,
+          });
           await markDone(rowId, simplify(result), result);
         } catch (e) {
           await markError(rowId, e);

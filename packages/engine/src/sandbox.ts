@@ -30,7 +30,15 @@ export interface RunFunctionOpts {
    * Evaluated once per call; globals it defines are visible to `code`.
    */
   prelude?: string;
+  /**
+   * Guest CPU-time budget in ms (default 30s). This bounds time the column's own
+   * code runs, NOT time spent waiting on host `sdk` calls — the deadline is pushed
+   * forward across every host dispatch (see {@link runFunction}), so a slow API or
+   * AI call never spends this budget.
+   */
   timeoutMs?: number;
+  /** Column name, used only to name the column in a compute-budget error message. */
+  label?: string;
   memoryLimitBytes?: number;
 }
 
@@ -58,7 +66,7 @@ function buildSdkPrelude(providers: Record<string, string[]>): string {
 }
 
 export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
-  const { inputs, providers, dispatch, timeoutMs = 30_000, memoryLimitBytes = 128 * 1024 * 1024 } = opts;
+  const { inputs, providers, dispatch, label, timeoutMs = 30_000, memoryLimitBytes = 128 * 1024 * 1024 } = opts;
   const code = normalizeCode(opts.code);
   const ctx = await newAsyncContext();
 
@@ -79,8 +87,17 @@ export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
 
   try {
     ctx.runtime.setMemoryLimit(memoryLimitBytes);
-    const deadline = Date.now() + timeoutMs;
-    ctx.runtime.setInterruptHandler(() => Date.now() > deadline);
+    // `deadline` bounds GUEST CPU time only. It is not fixed: every host dispatch
+    // pushes it forward by the time that dispatch took (see the bridge below), so
+    // the interrupt fires only when the column's OWN code runs too long, never
+    // because an `sdk` call was slow.
+    let deadline = Date.now() + timeoutMs;
+    let interrupted = false;
+    ctx.runtime.setInterruptHandler(() => {
+      if (Date.now() <= deadline) return false;
+      interrupted = true;
+      return true;
+    });
 
     // Asyncified host bridge: __hostCall(provider, method, inputJson) -> resultJson.
     const hostFn = ctx.newAsyncifiedFunction("__hostCall", async (provH, methodH, inputH) => {
@@ -97,6 +114,12 @@ export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
         return ctx.newString(JSON.stringify({ __hostError: msg }));
       }
       const input = JSON.parse(ctx.getString(inputH) || "{}");
+      // The guest is SUSPENDED for the whole of this dispatch (asyncify), yet the
+      // wall clock keeps running. Push `deadline` forward by however long the
+      // dispatch takes, so this host time is not charged to the guest CPU budget.
+      // Without it, any column whose API/AI call was slower than `timeoutMs` failed
+      // with the opaque "sandbox: interrupted" the moment the guest resumed.
+      const hostStart = Date.now();
       try {
         const result = await dispatch(provider, method, input);
         return ctx.newString(JSON.stringify(result === undefined ? null : result));
@@ -105,6 +128,8 @@ export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
         pendingError = err;
         const msg = err instanceof Error ? err.message : String(err);
         return ctx.newString(JSON.stringify({ __hostError: msg }));
+      } finally {
+        deadline += Date.now() - hostStart;
       }
     });
     ctx.setProp(ctx.global, "__hostCall", hostFn);
@@ -139,6 +164,19 @@ export async function runFunction(opts: RunFunctionOpts): Promise<unknown> {
       const dumped = ctx.dump(res.error);
       res.error.dispose();
       if (pendingError instanceof Error) throw pendingError;
+      if (interrupted) {
+        // The interrupt fired: the column's OWN code ran past the CPU budget (host
+        // `sdk` wait time is already excluded above). Name the column and the limit,
+        // and say plainly that API/AI wait time is not the cause, so a real runaway
+        // loop is not mistaken for a slow enrichment. Keep the `sandbox:` prefix so
+        // this stays a reportable defect.
+        const seconds = Math.round(timeoutMs / 1000);
+        const where = label ? `column "${label}"` : "this column";
+        throw new Error(
+          `sandbox: ${where} used more than ${seconds}s of compute time and was stopped. ` +
+            `Time spent waiting on API or AI calls does not count toward this limit.`,
+        );
+      }
       const message =
         dumped && typeof dumped === "object" && "message" in dumped ? String((dumped as any).message) : String(dumped);
       throw new Error(`sandbox: ${message}`);

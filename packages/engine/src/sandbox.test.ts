@@ -86,3 +86,38 @@ describe("runFunction __hostCall allow-list", () => {
     expect(result).toBe("pong");
   });
 });
+
+describe("runFunction compute budget", () => {
+  it("does NOT charge slow host dispatch against the guest CPU budget", async () => {
+    // The dispatch takes far longer than the whole budget, but the guest itself
+    // does almost no work — the call must still succeed (the deadline is pushed
+    // forward across the wait), not fail with an interrupt.
+    const dispatch = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 120));
+      return { ok: true };
+    });
+    const result = await runFunction({
+      code: "function(i, sdk){ return sdk.slow.call({}); }",
+      inputs: {},
+      providers: { slow: ["call"] },
+      dispatch,
+      timeoutMs: 40,
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("stops a genuine guest-CPU overrun with a message naming the column and the limit", async () => {
+    const dispatch = vi.fn(async () => ({ ok: true }));
+    await expect(
+      runFunction({
+        code: "function(){ for (;;) {} }",
+        inputs: {},
+        providers: {},
+        dispatch,
+        timeoutMs: 50,
+        label: "Enrich company",
+      }),
+    ).rejects.toThrow(/sandbox: column "Enrich company" used more than \d+s of compute time/);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+});
