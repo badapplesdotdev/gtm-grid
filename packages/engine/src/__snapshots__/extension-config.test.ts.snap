@@ -5321,6 +5321,30 @@ exports[`bundled extension rate-limit config > pins the rate-limit shape of ever
       },
     },
   },
+  "upspring": {
+    "connector": {
+      "concurrency": 3,
+      "rpm": 60,
+    },
+    "methods": {
+      "getAdvertiser": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+      "getAdvertiserByDomain": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+      "listAds": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+      "listAdvertisers": {
+        "concurrency": 3,
+        "rpm": 60,
+      },
+    },
+  },
   "zoominfo": {
     "connector": {
       "concurrency": 3,
@@ -5700,6 +5724,7 @@ exports[`bundled extension rate-limit config > ships the expected set of extensi
   "thecompaniesapi",
   "theirstack",
   "trigify",
+  "upspring",
   "zoominfo",
 ]
 `;

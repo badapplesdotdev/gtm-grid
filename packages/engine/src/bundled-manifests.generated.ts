@@ -99523,6 +99523,180 @@ export const BUNDLED_MANIFESTS: readonly unknown[] = [
     ]
   },
   {
+    "id": "upspring",
+    "name": "Upspring",
+    "version": "1.0.0",
+    "category": "enrichment",
+    "description": "Ad intelligence by domain: an advertiser's live ads plus coarse modelled spend, traffic and sales grades (D to A+), creative signals and a strategy read.",
+    "baseUrl": "https://public-api.upspring.ai",
+    "logo": "https://www.google.com/s2/favicons?domain=upspring.ai&sz=128",
+    "auth": {
+      "type": "apiKey",
+      "header": "Authorization",
+      "scheme": "Bearer ",
+      "secretKey": "apiKey",
+      "credentialLabel": "API key (upk_...)"
+    },
+    "rateLimit": {
+      "rpm": 60,
+      "concurrency": 3
+    },
+    "methods": [
+      {
+        "id": "getAdvertiserByDomain",
+        "label": "Get Advertiser by Domain",
+        "description": "Resolve one advertiser from a website domain (bare domain or full URL, normalized to the root). Returns { data } with id, name, vertical, category, summary, enrichment { spend, traffic, sales } (each { grade: D|C|B|A|A+, floor, estimated, note }), social { fb_followers, ig_followers, active_ads, as_of }, signals (personas, mechanisms, hooks, media_mix, funnel), hook_themes, top_ads [{ id, one_line, media_type, is_active }] and status. Never 404s: status is 'ready', 'pending' (call again after refetch_after seconds, or pass sync=true to wait briefly) or 'unavailable' (data is then just { domain, status }). Grades are coarse estimates, never exact figures.",
+        "verb": "GET",
+        "path": "/v1/advertisers/by-domain",
+        "input": {
+          "type": "object",
+          "required": [
+            "domain"
+          ],
+          "properties": {
+            "domain": {
+              "type": "string",
+              "description": "Website domain, e.g. 'takeultra.com' (a full URL is also accepted and normalized to the root)"
+            },
+            "sync": {
+              "type": "boolean",
+              "description": "Wait briefly (capped) for a 'pending' advertiser to become ready and return it in one response. Falls back to 'pending' if it does not settle in time."
+            }
+          }
+        },
+        "category": "Enrich company"
+      },
+      {
+        "id": "getAdvertiser",
+        "label": "Get Advertiser",
+        "description": "Get one advertiser's brief by Upspring advertiser id (from getAdvertiserByDomain or listAdvertisers). Same shape as getAdvertiserByDomain: profile, spend/traffic/sales grade enrichment, social, reddit summary, creative signals, hook themes and top ads, with status 'pending' | 'ready' | 'unavailable'.",
+        "verb": "GET",
+        "path": "/v1/advertisers/{id}",
+        "input": {
+          "type": "object",
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Upspring advertiser id"
+            }
+          }
+        },
+        "category": "Enrich company"
+      },
+      {
+        "id": "listAdvertisers",
+        "label": "List Advertisers",
+        "description": "List or filter advertisers. Returns { data[], meta } where each item has id, name, domain, vertical, category, subcategories, dominant, geo, active_ads and enrichment (spend/traffic/sales grades). spend_tier, traffic_tier and sales_tier are open floors (D <= C <= B <= A <= A+): 'B' returns advertisers graded B or higher. Page with meta.next_cursor.",
+        "verb": "GET",
+        "path": "/v1/advertisers",
+        "input": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Fuzzy advertiser-name lookup (typo tolerant)"
+            },
+            "domain": {
+              "type": "string",
+              "description": "Website domain, URL or partial term"
+            },
+            "fb_page": {
+              "type": "string",
+              "description": "Facebook page URL or numeric page id"
+            },
+            "vertical": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Vertical ids (OR match)"
+            },
+            "category": {
+              "type": "string",
+              "description": "Category id"
+            },
+            "geo": {
+              "type": "string",
+              "description": "Primary geography"
+            },
+            "min_ads": {
+              "type": "integer",
+              "description": "Minimum active-ad count"
+            },
+            "spend_tier": {
+              "type": "string",
+              "description": "Minimum spend grade: D | C | B | A | A+"
+            },
+            "traffic_tier": {
+              "type": "string",
+              "description": "Minimum traffic grade: D | C | B | A | A+"
+            },
+            "sales_tier": {
+              "type": "string",
+              "description": "Minimum sales grade: D | C | B | A | A+"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Page size, 1-50 (default 25)"
+            },
+            "cursor": {
+              "type": "string",
+              "description": "meta.next_cursor from the previous page"
+            }
+          }
+        },
+        "category": "Search"
+      },
+      {
+        "id": "listAds",
+        "label": "List Ads",
+        "description": "List or search ads. Returns { data[], meta } where each ad has id, advertiser, media_type, is_active, started_at, dimensions, one_line, hook_text, strength and ad_library_url. Pass advertiser_id (from getAdvertiserByDomain) with is_active=true to get an advertiser's live ads. Use q for keyword search. order_by is random (default) | recent | best. Page with meta.next_cursor.",
+        "verb": "GET",
+        "path": "/v1/ads",
+        "input": {
+          "type": "object",
+          "properties": {
+            "advertiser_id": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Advertiser ids (OR match)"
+            },
+            "is_active": {
+              "type": "boolean",
+              "description": "true = currently running ads only, false = stopped ads only, omit for both"
+            },
+            "q": {
+              "type": "string",
+              "description": "Free-text search query"
+            },
+            "recency_days": {
+              "type": "integer",
+              "description": "Only ads first seen in the last N days"
+            },
+            "order_by": {
+              "type": "string",
+              "description": "random (default) | recent | best"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Page size, 1-100 (default 25)"
+            },
+            "cursor": {
+              "type": "string",
+              "description": "meta.next_cursor from the previous page"
+            }
+          }
+        },
+        "category": "Search"
+      }
+    ]
+  },
+  {
     "id": "zoominfo",
     "name": "ZoomInfo",
     "version": "1.0.0",
