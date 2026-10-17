@@ -180,6 +180,8 @@ claude mcp get gtmgrid     # → Status: ✓ Connected
 
 Then in Claude Code: *"Using gtmgrid, create a table of these 10 founders and enrich each with their GitHub bio."*
 
+For a research-to-CSV workflow, see [Research companies with Parallel Search MCP](./docs/parallel-research.md): gather public company facts with source URLs in terminal Claude Code, then import them into a grid.
+
 ## Extensions (JSON manifests)
 
 Connectors can be uploaded as pure-data JSON manifests (Revcode's "Upload manifest" model) — no code needed. Manifests live in `extensions/`.
