@@ -10,6 +10,7 @@ import { Data, Effect, Layer, ManagedRuntime } from "effect";
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { isTransientUpdaterError } from "./updater-noise";
 
 declare const __POSTHOG_KEY__: string;
 declare const __POSTHOG_HOST__: string;
@@ -189,10 +190,6 @@ export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterSer
     const engine = yield* EngineService;
     const observability = yield* ObservabilityService;
 
-    // Plain connectivity blips — expected on laptops, never worth an error report.
-    const isOfflineNoise = (msg: string): boolean =>
-      /ERR_INTERNET_DISCONNECTED|ERR_NETWORK|ERR_CONNECTION|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|net::/i.test(msg);
-
     const setup = (send: (channel: string, ...args: unknown[]) => void) =>
       Effect.sync(() => {
         if (!app.isPackaged) return;
@@ -217,7 +214,7 @@ export class UpdaterService extends Effect.Service<UpdaterService>()("UpdaterSer
           // A user whose install SILENTLY fails is stuck offering themselves the
           // same version forever — the failure must reach Error Tracking with the
           // squirrel detail so it's diagnosable without their machine.
-          if (!isOfflineNoise(msg)) {
+          if (!isTransientUpdaterError(msg)) {
             void Effect.runPromise(
               observability.reportException(`auto-update failed: ${msg.slice(0, 400)}`, "autoUpdater"),
             ).catch(() => {});
