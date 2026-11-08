@@ -1,5 +1,5 @@
-// Updater errors that are never worth an error report: the next check (2h
-// later) recovers on its own, and nothing in our release can fix them.
+// Updater errors that are never worth an error report: the next scheduled check
+// recovers on its own, and nothing in our release can fix them.
 
 // Plain connectivity blips — expected on laptops.
 const OFFLINE = /ERR_INTERNET_DISCONNECTED|ERR_NETWORK|ERR_CONNECTION|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|net::/i;
