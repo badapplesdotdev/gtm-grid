@@ -9,6 +9,7 @@ import { schema } from "@gtmgrid/db";
 import { and, count, desc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { describeDbError } from "./_db-error.js";
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -336,8 +337,8 @@ function rowToRun(r: typeof schema.crmSyncRuns.$inferSelect): CrmSyncRun {
   };
 }
 
-const fail = (message: string) => (cause: unknown) =>
-  new CrmRepoError({ message: cause instanceof Error ? cause.message : message, cause });
+const fail = (op: string) => (cause: unknown) =>
+  new CrmRepoError({ message: describeDbError(op, cause), cause });
 
 // ── Live layers ───────────────────────────────────────────────────────────────
 
@@ -354,7 +355,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
                 const rows = await db.select().from(cb).where(eq(cb.id, id)).limit(1);
                 return Option.fromNullable(rows[0] === undefined ? null : rowToBinding(rows[0]));
               },
-              catch: fail("crm binding lookup failed"),
+              catch: fail("crm binding lookup"),
             })
           : Effect.succeed(Option.none<CrmBinding>()),
 
@@ -365,7 +366,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
                 const rows = await db.select().from(cb).where(eq(cb.tableId, tableId)).orderBy(desc(cb.createdAt));
                 return rows.map(rowToBinding);
               },
-              catch: fail("crm binding list failed"),
+              catch: fail("crm binding list"),
             })
           : Effect.succeed([] as readonly CrmBinding[]),
 
@@ -380,7 +381,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
                   .orderBy(desc(cb.createdAt));
                 return rows.map(rowToBinding);
               },
-              catch: fail("crm binding list failed"),
+              catch: fail("crm binding list"),
             })
           : Effect.succeed([] as readonly CrmBinding[]),
 
@@ -413,7 +414,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
                 rows.length > limit && last !== undefined ? { createdAt: last.createdAt, id: last.id } : null,
             };
           },
-          catch: fail("crm due-binding page failed"),
+          catch: fail("crm due-binding page"),
         }),
 
       insert: (values) =>
@@ -439,7 +440,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
             if (first === undefined) throw new Error("crm binding insert returned no id");
             return first.id;
           },
-          catch: fail("crm binding insert failed"),
+          catch: fail("crm binding insert"),
         }),
 
       patch: (id, patch) =>
@@ -457,7 +458,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
             if (Object.keys(set).length === 0) return;
             await db.update(cb).set(set).where(eq(cb.id, id));
           },
-          catch: fail("crm binding patch failed"),
+          catch: fail("crm binding patch"),
         }),
 
       remove: (id) =>
@@ -465,7 +466,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
           try: async () => {
             await db.delete(cb).where(eq(cb.id, id));
           },
-          catch: fail("crm binding delete failed"),
+          catch: fail("crm binding delete"),
         }),
 
       clearPause: ({ workspaceId, provider, reason }) =>
@@ -478,7 +479,7 @@ export const CrmBindingRepoLive: Layer.Layer<CrmBindingRepo, never, DbClient> = 
               .returning({ id: cb.id });
             return updated.length;
           },
-          catch: fail("crm binding unpause failed"),
+          catch: fail("crm binding unpause"),
         }),
     };
   }),
@@ -511,7 +512,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
                   .select(project)
                   .from(sr)
                   .where(and(eq(sr.bindingId, bindingId), inArray(sr.externalId, [...externalIds]))),
-              catch: fail("crm synced-row lookup failed"),
+              catch: fail("crm synced-row lookup"),
             }),
 
       findByMatchKeys: (bindingId, keys) =>
@@ -523,7 +524,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
                   .select(project)
                   .from(sr)
                   .where(and(eq(sr.bindingId, bindingId), inArray(sr.matchKey, [...keys]))),
-              catch: fail("crm synced-row match lookup failed"),
+              catch: fail("crm synced-row match lookup"),
             }),
 
       upsertMany: (entries) =>
@@ -561,7 +562,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
                     });
                 }
               },
-              catch: fail("crm synced-row upsert failed"),
+              catch: fail("crm synced-row upsert"),
             }),
 
       touchSeen: (bindingId, externalIds, runId) =>
@@ -577,7 +578,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
                     .where(and(eq(sr.bindingId, bindingId), inArray(sr.externalId, [...chunk])));
                 }
               },
-              catch: fail("crm synced-row touch failed"),
+              catch: fail("crm synced-row touch"),
             }),
 
       markStaleNotSeen: (bindingId, runId) =>
@@ -596,7 +597,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
               .returning({ id: sr.id });
             return flipped.length;
           },
-          catch: fail("crm stale marking failed"),
+          catch: fail("crm stale marking"),
         }),
 
       countByBinding: (bindingId) =>
@@ -605,7 +606,7 @@ export const CrmSyncedRowRepoLive: Layer.Layer<CrmSyncedRowRepo, never, DbClient
             const rows = await db.select({ n: count() }).from(sr).where(eq(sr.bindingId, bindingId));
             return rows[0]?.n ?? 0;
           },
-          catch: fail("crm synced-row count failed"),
+          catch: fail("crm synced-row count"),
         }),
     };
   }),
@@ -640,7 +641,7 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
             if (first === undefined) throw new Error("crm sync run insert returned no id");
             return first.id;
           },
-          catch: fail("crm sync run start failed"),
+          catch: fail("crm sync run start"),
         }),
 
       finish: (runId, args) =>
@@ -660,7 +661,7 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
               })
               .where(eq(runs.id, runId));
           },
-          catch: fail("crm sync run finish failed"),
+          catch: fail("crm sync run finish"),
         }),
 
       reapStale: (runId, staleBefore, args) =>
@@ -682,7 +683,7 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
               .returning({ id: runs.id });
             return updated.length > 0;
           },
-          catch: fail("crm stale sync run finish failed"),
+          catch: fail("crm stale sync run finish"),
         }),
 
       progress: (runId, args) =>
@@ -700,7 +701,7 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
               .returning({ id: runs.id });
             return updated.length > 0;
           },
-          catch: fail("crm sync run progress failed"),
+          catch: fail("crm sync run progress"),
         }),
 
       findById: (runId) =>
@@ -710,7 +711,7 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
                 const rows = await db.select().from(runs).where(eq(runs.id, runId)).limit(1);
                 return Option.fromNullable(rows[0] === undefined ? null : rowToRun(rows[0]));
               },
-              catch: fail("crm sync run lookup failed"),
+              catch: fail("crm sync run lookup"),
             })
           : Effect.succeed(Option.none<CrmSyncRun>()),
 
@@ -726,7 +727,7 @@ export const CrmSyncRunRepoLive: Layer.Layer<CrmSyncRunRepo, never, DbClient> = 
                   .limit(limit);
                 return rows.map(rowToRun);
               },
-              catch: fail("crm sync run list failed"),
+              catch: fail("crm sync run list"),
             })
           : Effect.succeed([] as readonly CrmSyncRun[]),
     };

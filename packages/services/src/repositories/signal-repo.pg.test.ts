@@ -14,7 +14,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { schema } from "@gtmgrid/db";
 import { drizzle } from "drizzle-orm/pglite";
-import { Effect, Exit, Layer } from "effect";
+import { Cause, Effect, Exit, Layer, Option } from "effect";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DbClient } from "../db-client.js";
 import { SignalRepo, SignalRepoLive } from "./signal-repo.js";
@@ -151,5 +151,25 @@ describe("SignalRepo.listDuePage (real Postgres — untyped-CASE regression)", (
       "00000000-0000-0000-0000-000000000006",
     ]);
     if (Exit.isSuccess(page2)) expect(page2.value.nextCursor).toBeNull();
+  });
+
+  // Runs last: it drops the table the earlier tests read.
+  it("reports the Postgres reason and SQLSTATE on failure, not the SQL dump", async () => {
+    await pg.exec("ALTER TABLE signal_bindings RENAME TO signal_bindings_gone");
+
+    const exit = await run(
+      Effect.flatMap(SignalRepo, (r) => r.listDuePage({ now: NOW, limit: 100, cursor: null })),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (!Exit.isFailure(exit)) return;
+    const failure = Cause.failureOption(exit.cause);
+    expect(Option.isSome(failure)).toBe(true);
+    if (Option.isNone(failure)) return;
+    expect(failure.value._tag).toBe("SignalRepoError");
+    expect(failure.value.message).toContain("signal due page failed:");
+    expect(failure.value.message).toContain('relation "signal_bindings" does not exist');
+    expect(failure.value.message).toContain("(42P01)");
+    expect(failure.value.message).not.toContain("Failed query:");
   });
 });
