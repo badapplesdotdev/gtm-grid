@@ -9,6 +9,7 @@ import { schema } from "@gtmgrid/db";
 import { and, asc, desc, eq, gt, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { describeDbError } from "./_db-error.js";
 import { isBindingDue, SCHEDULE_DUE_MS, type SignalSchedule } from "../signals/catalog.js";
 
 /** A result-field → column id mapping entry for a signal binding. */
@@ -178,8 +179,8 @@ function rowToBinding(r: {
   };
 }
 
-const fail = (message: string) => (cause: unknown) =>
-  new SignalRepoError({ message: cause instanceof Error ? cause.message : message, cause });
+const fail = (op: string) => (cause: unknown) =>
+  new SignalRepoError({ message: describeDbError(op, cause), cause });
 
 export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.effect(
   SignalRepo,
@@ -193,7 +194,7 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
                 const rows = await db.select().from(schema.signalBindings).where(eq(schema.signalBindings.id, id)).limit(1);
                 return Option.fromNullable(rows[0] === undefined ? null : rowToBinding(rows[0]));
               },
-              catch: fail("signal binding lookup failed"),
+              catch: fail("signal binding lookup"),
             })
           : Effect.succeed(Option.none<SignalBinding>()),
 
@@ -208,7 +209,7 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
                   .orderBy(desc(schema.signalBindings.createdAt));
                 return rows.map(rowToBinding);
               },
-              catch: fail("signal binding list failed"),
+              catch: fail("signal binding list"),
             })
           : Effect.succeed([] as readonly SignalBinding[]),
 
@@ -270,7 +271,7 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
                 hasMore && last !== undefined ? { createdAt: last.createdAt, id: last.id } : null,
             };
           },
-          catch: fail("signal due page failed"),
+          catch: fail("signal due page"),
         }),
 
       insert: (values) =>
@@ -300,7 +301,7 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
             if (id === undefined) throw new Error("signal binding insert returned no id");
             return id;
           },
-          catch: fail("signal binding insert failed"),
+          catch: fail("signal binding insert"),
         }),
 
       patch: (id, patch) =>
@@ -311,7 +312,7 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
               .set(patch as Record<string, unknown>)
               .where(eq(schema.signalBindings.id, id));
           },
-          catch: fail("signal binding patch failed"),
+          catch: fail("signal binding patch"),
         }),
 
       remove: (id) =>
@@ -319,7 +320,7 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
           try: async () => {
             await db.delete(schema.signalBindings).where(eq(schema.signalBindings.id, id));
           },
-          catch: fail("signal binding delete failed"),
+          catch: fail("signal binding delete"),
         }),
 
       recordSeenKeys: (bindingId, keys) =>
@@ -340,7 +341,7 @@ export const SignalRepoLive: Layer.Layer<SignalRepo, never, DbClient> = Layer.ef
                   .returning({ key: schema.signalSeenKeys.key });
                 return inserted.map((r) => r.key);
               },
-              catch: fail("signal seen-key record failed"),
+              catch: fail("signal seen-key record"),
             }),
     };
   }),

@@ -15,6 +15,7 @@ import { schema } from "@gtmgrid/db";
 import { and, asc, desc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { Context, Data, Effect, Layer, Option } from "effect";
 import { DbClient } from "../db-client.js";
+import { describeDbError } from "./_db-error.js";
 import { isBindingDue, SCHEDULE_DUE_MS, type SignalSchedule } from "../signals/catalog.js";
 
 /** A header → column mapping entry for a sheet binding. */
@@ -195,8 +196,8 @@ function rowToBinding(r: {
   };
 }
 
-const fail = (message: string) => (cause: unknown) =>
-  new SheetRepoError({ message: cause instanceof Error ? cause.message : message, cause });
+const fail = (op: string) => (cause: unknown) =>
+  new SheetRepoError({ message: describeDbError(op, cause), cause });
 
 export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effect(
   SheetRepo,
@@ -213,7 +214,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
                 const rows = await db.select().from(sb).where(eq(sb.id, id)).limit(1);
                 return Option.fromNullable(rows[0] === undefined ? null : rowToBinding(rows[0]));
               },
-              catch: fail("sheet binding lookup failed"),
+              catch: fail("sheet binding lookup"),
             })
           : Effect.succeed(Option.none<SheetBinding>()),
 
@@ -228,7 +229,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
                   .orderBy(desc(sb.createdAt));
                 return rows.map(rowToBinding);
               },
-              catch: fail("sheet binding list failed"),
+              catch: fail("sheet binding list"),
             })
           : Effect.succeed([] as readonly SheetBinding[]),
 
@@ -243,7 +244,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
                   .orderBy(desc(sb.createdAt));
                 return rows.map(rowToBinding);
               },
-              catch: fail("sheet binding list failed"),
+              catch: fail("sheet binding list"),
             })
           : Effect.succeed([] as readonly SheetBinding[]),
 
@@ -292,7 +293,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
                 hasMore && last !== undefined ? { createdAt: last.createdAt, id: last.id } : null,
             };
           },
-          catch: fail("sheet due page failed"),
+          catch: fail("sheet due page"),
         }),
 
       insert: (values) =>
@@ -322,7 +323,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
             if (id === undefined) throw new Error("sheet binding insert returned no id");
             return id;
           },
-          catch: fail("sheet binding insert failed"),
+          catch: fail("sheet binding insert"),
         }),
 
       patch: (id, patch) =>
@@ -343,7 +344,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
             if (Object.keys(set).length === 0) return;
             await db.update(sb).set(set).where(eq(sb.id, id));
           },
-          catch: fail("sheet binding patch failed"),
+          catch: fail("sheet binding patch"),
         }),
 
       remove: (id) =>
@@ -351,7 +352,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
           try: async () => {
             await db.delete(sb).where(eq(sb.id, id));
           },
-          catch: fail("sheet binding delete failed"),
+          catch: fail("sheet binding delete"),
         }),
 
       findSyncedByKeys: (bindingId, keys) =>
@@ -365,7 +366,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
                   .where(and(eq(ssr.bindingId, bindingId), inArray(ssr.externalKey, [...keys])));
                 return rows;
               },
-              catch: fail("sheet synced-row lookup failed"),
+              catch: fail("sheet synced-row lookup"),
             }),
 
       upsertSynced: (bindingId, entries) =>
@@ -395,7 +396,7 @@ export const SheetRepoLive: Layer.Layer<SheetRepo, never, DbClient> = Layer.effe
                     },
                   });
               },
-              catch: fail("sheet synced-row upsert failed"),
+              catch: fail("sheet synced-row upsert"),
             }),
     };
   }),
